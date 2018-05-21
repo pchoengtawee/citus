@@ -211,13 +211,12 @@ DROP TABLE referenced_table;
 
 -- Similar tests, but this time we push foreign key constraints created by ALTER TABLE queries
 -- create tables
+SET citus.shard_count TO 4;
 CREATE TABLE referenced_table(id int UNIQUE, test_column int, PRIMARY KEY(id, test_column));
-SELECT master_create_distributed_table('referenced_table', 'id', 'hash');
-SELECT master_create_worker_shards('referenced_table', 4, 1);
+SELECT create_distributed_table('referenced_table', 'id');
 
 CREATE TABLE referencing_table(id int, ref_id int);
-SELECT master_create_distributed_table('referencing_table', 'ref_id', 'hash');
-SELECT master_create_worker_shards('referencing_table', 4, 1);
+SELECT create_distributed_table('referencing_table', 'ref_id');
 
 -- verify that we skip foreign key validation when propagation is turned off
 -- not skipping validation would result in a distributed query, which emits debug messages
@@ -243,6 +242,7 @@ ALTER TABLE referencing_table ADD CONSTRAINT test_constraint FOREIGN KEY(ref_id)
 ALTER TABLE referencing_table ADD FOREIGN KEY(ref_id) REFERENCES referenced_table(id);
 
 -- test foreign constraint creation on NOT co-located tables
+UPDATE pg_dist_partition SET colocationid = colocationid + 10000 WHERE logicalrelid = 'referenced_table'::regclass;
 ALTER TABLE referencing_table ADD CONSTRAINT test_constraint FOREIGN KEY(ref_id) REFERENCES referenced_table(id);
 
 -- create co-located tables
