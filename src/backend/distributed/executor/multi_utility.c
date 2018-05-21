@@ -1389,6 +1389,15 @@ PlanAlterTableStmt(AlterTableStmt *alterTableStatement, const char *alterTableCo
 		/* if foreign key related, use specialized task list function ... */
 		ddlJob->taskList = InterShardDDLTaskList(leftRelationId, rightRelationId,
 												 alterTableCommand);
+
+		/*
+		 * Executing foreign key creation in parallel on the workers
+		 * create a self distributed deadlock.
+		 */
+		if (PartitionMethod(rightRelationId) == DISTRIBUTE_BY_NONE)
+		{
+			ddlJob->executeSequentially = true;
+		}
 	}
 	else
 	{
@@ -2780,14 +2789,6 @@ ErrorIfUnsupportedForeignConstraint(Relation relation, char distributionMethod,
 	/* clean up scan and close system catalog */
 	systable_endscan(scanDescriptor);
 	heap_close(pgConstraint, AccessShareLock);
-
-	/* error out since we've not implemented task creation logic yet */
-	if (referencedTableIsAReferenceTable)
-	{
-		ereport(ERROR, (errcode(ERRCODE_INVALID_TABLE_DEFINITION),
-						errmsg("NOT IMPLEMENTED: cannot create foreign key constraint "
-							   "to reference tables")));
-	}
 }
 
 
@@ -3166,7 +3167,14 @@ ExecuteDistributedDDLJob(DDLJob *ddlJob)
 			SendCommandToWorkers(WORKERS_WITH_METADATA, (char *) ddlJob->commandString);
 		}
 
-		ExecuteModifyTasksWithoutResults(ddlJob->taskList);
+		if (ddlJob->executeSequentially)
+		{
+			ExecuteTasksSequentiallyWithoutResults(ddlJob->taskList);
+		}
+		else
+		{
+			ExecuteModifyTasksWithoutResults(ddlJob->taskList);
+		}
 	}
 	else
 	{
