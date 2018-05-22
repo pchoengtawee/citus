@@ -46,8 +46,6 @@ OpenTransactionsForAllTasks(List *taskList, int connectionFlags)
 
 	shardConnectionHash = CreateShardConnectionHash(CurrentMemoryContext);
 
-	connectionFlags |= CONNECTION_PER_PLACEMENT;
-
 	/* open connections to shards which don't have connections yet */
 	foreach(taskCell, taskList)
 	{

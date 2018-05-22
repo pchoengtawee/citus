@@ -88,7 +88,8 @@ static List * GetModifyConnections(Task *task, bool markCritical);
 static void ExecuteMultipleTasks(CitusScanState *scanState, List *taskList,
 								 bool isModificationQuery, bool expectResults);
 static int64 ExecuteModifyTasks(List *taskList, bool expectResults,
-								ParamListInfo paramListInfo, CitusScanState *scanState);
+								ParamListInfo paramListInfo, CitusScanState *scanState,
+								bool connectionPerPlacement);
 static void AcquireExecutorShardLock(Task *task, CmdType commandType);
 static void AcquireExecutorMultiShardLocks(List *taskList);
 static bool RequiresConsistentSnapshot(Task *task);
@@ -993,12 +994,13 @@ ExecuteMultipleTasks(CitusScanState *scanState, List *taskList,
 	EState *executorState = scanState->customScanState.ss.ps.state;
 	ParamListInfo paramListInfo = executorState->es_param_list_info;
 	int64 affectedTupleCount = -1;
+	bool connectionPerPlacement = true;
 
 	/* can only support modifications right now */
 	Assert(isModificationQuery);
 
 	affectedTupleCount = ExecuteModifyTasks(taskList, expectResults, paramListInfo,
-											scanState);
+											scanState, connectionPerPlacement);
 
 	executorState->es_processed = affectedTupleCount;
 }
@@ -1014,7 +1016,9 @@ ExecuteMultipleTasks(CitusScanState *scanState, List *taskList,
 int64
 ExecuteModifyTasksWithoutResults(List *taskList)
 {
-	return ExecuteModifyTasks(taskList, false, NULL, NULL);
+	bool connectionPerPlacement = true;
+
+	return ExecuteModifyTasks(taskList, false, NULL, NULL, connectionPerPlacement);
 }
 
 
@@ -1032,9 +1036,9 @@ ExecuteTasksSequentiallyWithoutResults(List *taskList)
 	foreach(taskCell, taskList)
 	{
 		Task *task = (Task *) lfirst(taskCell);
-		List *singleTask = list_make1(task);
+		bool connectionPerPlacement = false;
 
-		ExecuteModifyTasksWithoutResults(singleTask);
+		ExecuteModifyTasks(taskList, false, NULL, NULL, connectionPerPlacement);
 	}
 }
 
@@ -1049,7 +1053,7 @@ ExecuteTasksSequentiallyWithoutResults(List *taskList)
  */
 static int64
 ExecuteModifyTasks(List *taskList, bool expectResults, ParamListInfo paramListInfo,
-				   CitusScanState *scanState)
+				   CitusScanState *scanState, bool connectionPerPlacement)
 {
 	int64 totalAffectedTupleCount = 0;
 	ListCell *taskCell = NULL;
@@ -1107,6 +1111,11 @@ ExecuteModifyTasks(List *taskList, bool expectResults, ParamListInfo paramListIn
 	else
 	{
 		connectionFlags = FOR_DML;
+	}
+
+	if (connectionPerPlacement)
+	{
+		connectionFlags |= CONNECTION_PER_PLACEMENT;
 	}
 
 	/* open connection to all relevant placements, if not already open */
