@@ -2711,8 +2711,9 @@ ErrorIfUnsupportedForeignConstraint(Relation relation, char distributionMethod,
 			{
 				ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 								errmsg("cannot create foreign key constraint"),
-								errdetail("SET NULL or SET DEFAULT is not supported"
-										  " in ON DELETE operation.")));
+								errdetail("SET NULL or SET DEFAULT is not supported "
+										  "in ON DELETE operation when distribution "
+										  "key included in the foreign constraint.")));
 			}
 
 			/*
@@ -2727,8 +2728,10 @@ ErrorIfUnsupportedForeignConstraint(Relation relation, char distributionMethod,
 			{
 				ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 								errmsg("cannot create foreign key constraint"),
-								errdetail("SET NULL, SET DEFAULT or CASCADE is not"
-										  " supported in ON UPDATE operation.")));
+								errdetail("SET NULL, SET DEFAULT or CASCADE is not "
+										  "supported in ON UPDATE operation  when "
+										  "distribution key included in the foreign "
+										  "constraint.")));
 			}
 		}
 
@@ -3169,7 +3172,7 @@ ExecuteDistributedDDLJob(DDLJob *ddlJob)
 
 		if (ddlJob->executeSequentially)
 		{
-			ExecuteTasksSequentiallyWithoutResults(ddlJob->taskList);
+			ExecuteDDLTasksSequentiallyWithoutResults(ddlJob->taskList);
 		}
 		else
 		{
