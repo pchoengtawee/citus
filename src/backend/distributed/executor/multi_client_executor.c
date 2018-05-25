@@ -188,7 +188,7 @@ MultiClientPlacementConnectStart(List *placementAccessList, const char *userName
 	MultiConnection *connection = NULL;
 	ConnStatusType connStatusType = CONNECTION_OK;
 	int32 connectionId = AllocateConnectionId();
-	int connectionFlags = CONNECTION_PER_PLACEMENT; /* no cached connections for now */
+	int connectionFlags = SESSION_LIFESPAN; /* no cached connections for now */
 
 	if (connectionId == INVALID_CONNECTION_ID)
 	{

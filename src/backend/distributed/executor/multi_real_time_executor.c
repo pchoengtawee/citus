@@ -914,7 +914,7 @@ WorkerConnectionsExhausted(WorkerNodeState *workerNodeState)
 	 * on the master as a proxy for the worker configuration to avoid introducing a
 	 * new configuration value.
 	 */
-	if (workerNodeState->openConnectionCount >= MaxConnections)
+	if (workerNodeState->openConnectionCount >= 1)
 	{
 		reachedLimit = true;
 	}
