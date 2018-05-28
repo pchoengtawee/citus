@@ -72,7 +72,9 @@ typedef enum
 	AGGREGATE_BOOL_OR = 14,
 	AGGREGATE_EVERY = 15,
 	AGGREGATE_TOPN_ADD_AGG = 16,
-	AGGREGATE_TOPN_UNION_AGG = 17
+	AGGREGATE_TOPN_UNION_AGG = 17,
+	AGGREGATE_HLL_ADD_AGG = 18,
+	AGGREGATE_HLL_UNION_AGG = 19
 } AggregateType;
 
 
@@ -118,7 +120,18 @@ static const char *const AggregateNames[] = {
 	"jsonb_agg", "jsonb_object_agg",
 	"json_agg", "json_object_agg",
 	"bit_and", "bit_or", "bool_and", "bool_or", "every",
-	"topn_add_agg", "topn_union_agg"
+	"topn_add_agg", "topn_union_agg",
+	"hll_add_agg", "hll_union_agg"
+};
+
+static const char *const MasterAggregates[] = {
+	"invalid", "avg", "min", "max",
+	"sum", "count", "array_agg",
+	"jsonb_agg", "jsonb_object_agg",
+	"json_agg", "json_object_agg",
+	"bit_and", "bit_or", "bool_and", "bool_or", "every",
+	"topn_union_agg", "topn_union_agg",
+	"hll_union_agg", "hll_union_agg"
 };
 
 

@@ -291,6 +291,8 @@ static bool HasOrderByAggregate(List *sortClauseList, List *targetList);
 static bool HasOrderByAverage(List *sortClauseList, List *targetList);
 static bool HasOrderByComplexExpression(List *sortClauseList, List *targetList);
 static bool HasOrderByHllType(List *sortClauseList, List *targetList);
+static Expr * GetMasterAggregate(AggregateType aggregateType, Aggref *originalAggregate,
+								 AttrNumber columnId);
 
 
 /*
@@ -1764,62 +1766,62 @@ MasterAggregateExpression(Aggref *originalAggregate,
 		newMasterExpression = (Expr *) newMasterAggregate;
 	}
 	else if (aggregateType == AGGREGATE_TOPN_UNION_AGG ||
-			 aggregateType == AGGREGATE_TOPN_ADD_AGG)
+			 aggregateType == AGGREGATE_TOPN_ADD_AGG ||
+			 aggregateType == AGGREGATE_HLL_UNION_AGG ||
+			 aggregateType == AGGREGATE_HLL_ADD_AGG)
 	{
-		/*
-		 * Top-N aggregates are handled in two steps. First, we compute
-		 * topn_add_agg() or topn_union_agg() aggregates on the worker nodes.
-		 * Then, we gather the Top-Ns on the master and take the union of all
-		 * to get the final topn.
-		 */
-		Var *column = NULL;
-		TargetEntry *topNAggArgument = NULL;
-		Aggref *masterUnionAggregate = NULL;
-		Oid aggregateFunctionId = InvalidOid;
-		const char *unionAggregateName = TOPN_UNION_AGGREGATE_NAME;
-		Oid unionInputType = JSONBOID;
-		List *args = NULL;
-		List *aggArgTypes = NULL;
+/*		/ * */
+/*		 * Top-N aggregates are handled in two steps. First, we compute */
+/*		 * topn_add_agg() or topn_union_agg() aggregates on the worker nodes. */
+/*		 * Then, we gather the Top-Ns on the master and take the union of all */
+/*		 * to get the final topn. */
+/*		 * / */
+/*		Var *column = NULL; */
+/*		TargetEntry *topNAggArgument = NULL; */
+/*		Aggref *masterUnionAggregate = NULL; */
+/*		Oid aggregateFunctionId = InvalidOid; */
+/*		const char *unionAggregateName = TOPN_UNION_AGGREGATE_NAME; */
+/*		Oid unionInputType = JSONBOID; */
+/*		List *args = NULL; */
+/*		List *aggArgTypes = NULL; */
+/* */
+/*		/ * worker aggregate and original aggregate have same return type * / */
+/*		Oid workerReturnType = exprType((Node *) originalAggregate); */
+/*		int32 workerReturnTypeMod = exprTypmod((Node *) originalAggregate); */
+/*		Oid workerCollationId = exprCollation((Node *) originalAggregate); */
+/* */
+/*		aggregateFunctionId = AggregateFunctionOid(unionAggregateName, */
+/*												   unionInputType, */
+/*												   list_length(originalAggregate->args)); */
+/* */
+/*		/ * create argument for the topn_union_agg() aggregate * / */
+/*		column = makeVar(masterTableId, walkerContext->columnId, workerReturnType, */
+/*						 workerReturnTypeMod, workerCollationId, columnLevelsUp); */
+/*		topNAggArgument = makeTargetEntry((Expr *) column, argumentId, NULL, false); */
+/* */
+/*		args = list_make1(topNAggArgument); */
+/*		aggArgTypes = list_make1_oid(JSONBOID); */
+/*		/ * */
+/*		 * In case the custom number of counters is used in topn_add_agg() */
+/*		 * or topn_union_agg() */
+/*		 * / */
+/*		if (list_length(originalAggregate->args) == 2) */
+/*		{ */
+/*			args = lappend(args, (TargetEntry *)list_nth(originalAggregate->args, 1)); */
+/*			aggArgTypes = list_make2_oid(JSONBOID, INT4OID); */
+/*		} */
+/* */
+/* */
+/*		/ * construct the master topn_union_agg() expression * / */
+/*		masterUnionAggregate = copyObject(originalAggregate); */
+/*		masterUnionAggregate->aggfnoid = aggregateFunctionId; */
+/*		masterUnionAggregate->args = args; */
+/*		masterUnionAggregate->aggtype = originalAggregate->aggtype; */
+/*		masterUnionAggregate->aggargtypes = aggArgTypes; */
 
-		/* worker aggregate and original aggregate have same return type */
-		Oid workerReturnType = exprType((Node *) originalAggregate);
-		int32 workerReturnTypeMod = exprTypmod((Node *) originalAggregate);
-		Oid workerCollationId = exprCollation((Node *) originalAggregate);
-
-		aggregateFunctionId = AggregateFunctionOid(unionAggregateName,
-												   unionInputType,
-												   list_length(originalAggregate->args));
-
-		/* create argument for the topn_union_agg() aggregate */
-		column = makeVar(masterTableId, walkerContext->columnId, workerReturnType,
-						 workerReturnTypeMod, workerCollationId, columnLevelsUp);
-		topNAggArgument = makeTargetEntry((Expr *) column, argumentId, NULL, false);
-
-		args = list_make1(topNAggArgument);
-		aggArgTypes = list_make1_oid(JSONBOID);
-		/*
-		 * In case the custom number of counters is used in topn_add_agg()
-		 * or topn_union_agg()
-		 */
-		if (list_length(originalAggregate->args) == 2)
-		{
-			args = lappend(args, (TargetEntry *)list_nth(originalAggregate->args, 1));
-			aggArgTypes = list_make2_oid(JSONBOID, INT4OID);
-		}
-
+		newMasterExpression = GetMasterAggregate(aggregateType, originalAggregate,
+												 walkerContext->columnId);
 		walkerContext->columnId++;
-
-		/* construct the master topn_union_agg() expression */
-		masterUnionAggregate = copyObject(originalAggregate);
-		masterUnionAggregate->aggfnoid = aggregateFunctionId;
-		masterUnionAggregate->args = args;
-		masterUnionAggregate->aggtype = originalAggregate->aggtype;
-		masterUnionAggregate->aggargtypes = aggArgTypes;
-
-		elog(INFO, "MASTER: %s", nodeToString(masterUnionAggregate));
-		elog(INFO, "ORIGINAL: %s", nodeToString(originalAggregate));
-
-		newMasterExpression = (Expr *) masterUnionAggregate;
 	}
 	else
 	{
@@ -1836,7 +1838,8 @@ MasterAggregateExpression(Aggref *originalAggregate,
 		Oid workerCollationId = exprCollation((Node *) originalAggregate);
 
 		const char *aggregateName = AggregateNames[aggregateType];
-		Oid aggregateFunctionId = AggregateFunctionOid(aggregateName, workerReturnType, 1);
+		Oid aggregateFunctionId = AggregateFunctionOid(aggregateName, workerReturnType,
+													   1);
 		Oid masterReturnType = get_func_rettype(aggregateFunctionId);
 
 		Aggref *newMasterAggregate = copyObject(originalAggregate);
@@ -1876,6 +1879,64 @@ MasterAggregateExpression(Aggref *originalAggregate,
 						 &aggregateCosts);
 
 	return newMasterExpression;
+}
+
+
+static Expr *
+GetMasterAggregate(AggregateType aggregateType, Aggref *originalAggregate, AttrNumber
+				   columnId)
+{
+	/*
+	 * Top-N aggregates are handled in two steps. First, we compute
+	 * topn_add_agg() or topn_union_agg() aggregates on the worker nodes.
+	 * Then, we gather the Top-Ns on the master and take the union of all
+	 * to get the final topn.
+	 */
+	Var *column = NULL;
+	TargetEntry *topNAggArgument = NULL;
+	Aggref *masterUnionAggregate = NULL;
+	Oid aggregateFunctionId = InvalidOid;
+	const char *unionAggregateName = MasterAggregates[aggregateType];
+	Oid unionInputType = originalAggregate->aggtype;
+	List *args = NULL;
+	List *aggArgTypes = NULL;
+
+	/* worker aggregate and original aggregate have same return type */
+	Oid workerReturnType = exprType((Node *) originalAggregate);
+	int32 workerReturnTypeMod = exprTypmod((Node *) originalAggregate);
+	Oid workerCollationId = exprCollation((Node *) originalAggregate);
+
+	aggregateFunctionId = AggregateFunctionOid(unionAggregateName,
+											   unionInputType,
+											   list_length(originalAggregate->args));
+
+	/* create argument for the topn_union_agg() aggregate */
+	column = makeVar(1, columnId, workerReturnType,
+					 workerReturnTypeMod, workerCollationId, 0);
+	topNAggArgument = makeTargetEntry((Expr *) column, 1, NULL, false);
+
+	args = list_make1(topNAggArgument);
+	aggArgTypes = list_make1_oid(unionInputType);
+
+	/*
+	 * In case the custom number of counters is used in topn_add_agg()
+	 * or topn_union_agg()
+	 */
+	if (list_length(originalAggregate->args) == 2)
+	{
+		args = lappend(args, (TargetEntry *) list_nth(originalAggregate->args, 1));
+		aggArgTypes = list_make2_oid(unionInputType, list_nth(
+										 originalAggregate->aggargtypes, 1));
+	}
+
+	/* construct the master topn_union_agg() expression */
+	masterUnionAggregate = copyObject(originalAggregate);
+	masterUnionAggregate->aggfnoid = aggregateFunctionId;
+	masterUnionAggregate->args = args;
+	masterUnionAggregate->aggtype = originalAggregate->aggtype;
+	masterUnionAggregate->aggargtypes = aggArgTypes;
+
+	return (Expr *) masterUnionAggregate;
 }
 
 
