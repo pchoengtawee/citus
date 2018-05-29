@@ -126,9 +126,9 @@ static const char *const AggregateNames[] = {
 
 static const char *const MasterAggregates[] = {
 	"invalid", "avg", "min", "max",
-	"sum", "count", "array_agg",
-	"jsonb_agg", "jsonb_object_agg",
-	"json_agg", "json_object_agg",
+	"sum", "count", "array_cat_agg",
+	"jsonb_cat_agg", "jsonb_cat_agg",
+	"json_cat_agg", "json_cat_agg",
 	"bit_and", "bit_or", "bool_and", "bool_or", "every",
 	"topn_union_agg", "topn_union_agg",
 	"hll_union_agg", "hll_union_agg"
