@@ -291,6 +291,7 @@ static bool HasOrderByAggregate(List *sortClauseList, List *targetList);
 static bool HasOrderByAverage(List *sortClauseList, List *targetList);
 static bool HasOrderByComplexExpression(List *sortClauseList, List *targetList);
 static bool HasOrderByHllType(List *sortClauseList, List *targetList);
+static AggregateInfo *GetAggregateInfo(char *aggregateName);
 
 
 /*
@@ -1764,107 +1765,171 @@ MasterAggregateExpression(Aggref *originalAggregate,
 		newMasterExpression = (Expr *) newMasterAggregate;
 	}
 	else if (aggregateType == AGGREGATE_HLL_ADD ||
-			 aggregateType == AGGREGATE_HLL_UNION)
+			 aggregateType == AGGREGATE_HLL_UNION ||
+			 aggregateType == AGGREGATE_TOPN_UNION ||
+			 aggregateType == AGGREGATE_TOPN_ADD)
 	{
-		/*
-		 * If hll aggregates are called, we simply create the hll_union_aggregate
-		 * to apply in the master after running the original aggregate in
-		 * workers.
-		 */
+		char *aggName = AggregateNames[aggregateType];
 		const int argCount = list_length(originalAggregate->args);
-		const int defaultTypeMod = -1;
-
-		TargetEntry *hllTargetEntry = NULL;
-		Aggref *unionAggregate = NULL;
-
-		/* extract schema name of hll */
-		Oid hllId = get_extension_oid(HLL_EXTENSION_NAME, false);
-		Oid hllSchemaOid = get_extension_schema(hllId);
-		const char *hllSchemaName = get_namespace_name(hllSchemaOid);
-
-		Oid unionFunctionId = FunctionOid(hllSchemaName, HLL_UNION_AGGREGATE_NAME,
-										  argCount);
-
-		Oid hllType = TypeOid(hllSchemaOid, HLL_TYPE_NAME);
-		Oid hllTypeCollationId = get_typcollation(hllType);
-		Var *hllColumn = makeVar(masterTableId, walkerContext->columnId, hllType,
-								 defaultTypeMod,
-								 hllTypeCollationId, columnLevelsUp);
-		walkerContext->columnId++;
-
-		hllTargetEntry = makeTargetEntry((Expr *) hllColumn, argumentId, NULL, false);
-
-		unionAggregate = makeNode(Aggref);
-		unionAggregate->aggfnoid = unionFunctionId;
-		unionAggregate->aggtype = hllType;
-		unionAggregate->args = list_make1(hllTargetEntry);
-		unionAggregate->aggkind = AGGKIND_NORMAL;
-		unionAggregate->aggfilter = NULL;
-		unionAggregate->aggtranstype = InvalidOid;
-		unionAggregate->aggargtypes = list_make1_oid(unionAggregate->aggtype);
-		unionAggregate->aggsplit = AGGSPLIT_SIMPLE;
-
-		newMasterExpression = (Expr *) unionAggregate;
-	}
-	else if (aggregateType == AGGREGATE_TOPN_UNION_AGG ||
-			 aggregateType == AGGREGATE_TOPN_ADD_AGG)
-	{
-		/*
-		 * Top-N aggregates are handled in two steps. First, we compute
-		 * topn_add_agg() or topn_union_agg() aggregates on the worker nodes.
-		 * Then, we gather the Top-Ns on the master and take the union of all
-		 * to get the final topn.
-		 */
-		Var *column = NULL;
-		TargetEntry *topNAggArgument = NULL;
-		Aggref *masterUnionAggregate = NULL;
-		Oid aggregateFunctionId = InvalidOid;
-		const char *unionAggregateName = TOPN_UNION_AGGREGATE_NAME;
-		Oid unionInputType = JSONBOID;
-		List *args = NULL;
-		List *aggArgTypes = NULL;
-
-		/* worker aggregate and original aggregate have same return type */
-		Oid workerReturnType = exprType((Node *) originalAggregate);
+		TargetEntry *targetEntry = NULL;
+		Aggref *masterAggregate = NULL;
+		AggregateInfo *aggregateInfo = GetAggregateInfo(aggName);
+		Oid masterFunctionId = InvalidOid;
+		Oid aggReturnType = aggregateInfo -> masterInputType;
 		int32 workerReturnTypeMod = exprTypmod((Node *) originalAggregate);
 		Oid workerCollationId = exprCollation((Node *) originalAggregate);
+		Var *column = NULL;
+		List *args = NULL;
 
-		aggregateFunctionId = AggregateFunctionOid(unionAggregateName,
-												   unionInputType,
-												   list_length(originalAggregate->args));
-
-		/* create argument for the topn_union_agg() aggregate */
-		column = makeVar(masterTableId, walkerContext->columnId, workerReturnType,
-						 workerReturnTypeMod, workerCollationId, columnLevelsUp);
-		topNAggArgument = makeTargetEntry((Expr *) column, argumentId, NULL, false);
-
-		args = list_make1(topNAggArgument);
-		aggArgTypes = list_make1_oid(JSONBOID);
-
-		/*
-		 * In case the custom number of counters is used in topn_add_agg()
-		 * or topn_union_agg()
-		 */
-		if (list_length(originalAggregate->args) == 2)
+		if (aggregateInfo->extension)
 		{
-			args = lappend(args, (TargetEntry *) list_nth(originalAggregate->args, 1));
-			aggArgTypes = list_make2_oid(JSONBOID, INT4OID);
+			Oid extensionOid = get_extension_oid(aggregateInfo->extensionName, false);
+			Oid extensionSchemaOid = get_extension_schema(extensionOid);
+			const char *extensionSchemaName = get_namespace_name(extensionSchemaOid);
+
+			if (aggReturnType == InvalidOid && aggregateInfo->returnTypeName)
+			{
+				aggReturnType = TypeOid(extensionSchemaOid, aggregateInfo->returnTypeName);
+				workerCollationId = get_typcollation(aggReturnType);
+
+			}
+
+			masterFunctionId = FunctionOid(extensionSchemaName, aggregateInfo->aggMasterName,
+										   argCount);
 		}
 
+		column = makeVar(masterTableId, walkerContext->columnId, aggReturnType,
+						 workerReturnTypeMod, workerCollationId, columnLevelsUp);
 		walkerContext->columnId++;
 
-		/* construct the master topn_union_agg() expression */
-		masterUnionAggregate = copyObject(originalAggregate);
-		masterUnionAggregate->aggfnoid = aggregateFunctionId;
-		masterUnionAggregate->args = args;
-		masterUnionAggregate->aggtype = originalAggregate->aggtype;
-		masterUnionAggregate->aggargtypes = aggArgTypes;
+		targetEntry = makeTargetEntry((Expr *) column, argumentId, NULL, false);
+		args = list_make1(targetEntry);
 
-		elog(INFO, "MASTER: %s", nodeToString(masterUnionAggregate));
-		elog(INFO, "ORIGINAL: %s", nodeToString(originalAggregate));
+		for(int index = 1; index < list_length(originalAggregate->args); index++)
+		{
+			args = lappend(args, (TargetEntry *) list_nth(originalAggregate->args, index));
+		}
 
-		newMasterExpression = (Expr *) masterUnionAggregate;
+		masterAggregate = makeNode(Aggref);
+		masterAggregate->aggfnoid = masterFunctionId;
+		masterAggregate->aggtype = aggReturnType;
+		masterAggregate->args = args;
+		masterAggregate->aggkind = AGGKIND_NORMAL;
+		masterAggregate->aggfilter = NULL;
+		masterAggregate->aggtranstype = InvalidOid;
+		masterAggregate->aggargtypes = list_make1_oid(aggReturnType);
+		masterAggregate->aggsplit = AGGSPLIT_SIMPLE;
+
+		newMasterExpression = (Expr *) masterAggregate;
 	}
+//	else if (aggregateType == AGGREGATE_HLL_ADD ||
+//			 aggregateType == AGGREGATE_HLL_UNION)
+//	{
+//		/*
+//		 * If hll aggregates are called, we simply create the hll_union_aggregate
+//		 * to apply in the master after running the original aggregate in
+//		 * workers.
+//		 */
+//		const int argCount = list_length(originalAggregate->args);
+//		const int defaultTypeMod = -1;
+//
+//		TargetEntry *hllTargetEntry = NULL;
+//		Aggref *unionAggregate = NULL;
+//
+//		/* extract schema name of hll */
+//		Oid hllId = get_extension_oid(HLL_EXTENSION_NAME, false);
+//		Oid hllSchemaOid = get_extension_schema(hllId);
+//		const char *hllSchemaName = get_namespace_name(hllSchemaOid);
+//
+//		Oid unionFunctionId = FunctionOid(hllSchemaName, HLL_UNION_AGGREGATE_NAME,
+//										  argCount);
+//
+//		Oid hllType = TypeOid(hllSchemaOid, HLL_TYPE_NAME);
+//		Oid hllTypeCollationId = get_typcollation(hllType);
+//		Var *hllColumn = makeVar(masterTableId, walkerContext->columnId, hllType,
+//								 defaultTypeMod,
+//								 hllTypeCollationId, columnLevelsUp);
+//		walkerContext->columnId++;
+//
+//		hllTargetEntry = makeTargetEntry((Expr *) hllColumn, argumentId, NULL, false);
+//
+//		unionAggregate = makeNode(Aggref);
+//		unionAggregate->aggfnoid = unionFunctionId;
+//		unionAggregate->aggtype = hllType;
+//		unionAggregate->args = list_make1(hllTargetEntry);
+//		unionAggregate->aggkind = AGGKIND_NORMAL;
+//		unionAggregate->aggfilter = NULL;
+//		unionAggregate->aggtranstype = InvalidOid;
+//		unionAggregate->aggargtypes = list_make1_oid(unionAggregate->aggtype);
+//		unionAggregate->aggsplit = AGGSPLIT_SIMPLE;
+//
+//		newMasterExpression = (Expr *) unionAggregate;
+//	}
+//	else if (aggregateType == AGGREGATE_TOPN_UNION ||
+//			 aggregateType == AGGREGATE_TOPN_ADD)
+//	{
+//		/*
+//		 * Top-N aggregates are handled in two steps. First, we compute
+//		 * topn_add_agg() or topn_union_agg() aggregates on the worker nodes.
+//		 * Then, we gather the Top-Ns on the master and take the union of all
+//		 * to get the final topn.
+//		 */
+//		Var *column = NULL;
+//		TargetEntry *topNAggArgument = NULL;
+//		Aggref *masterUnionAggregate = NULL;
+//		Oid aggregateFunctionId = InvalidOid;
+//		const char *unionAggregateName = TOPN_UNION_AGGREGATE_NAME;
+//		List *args = NULL;
+//		List *aggArgTypes = NULL;
+//
+//		/* worker aggregate and original aggregate have same return type */
+//		Oid workerReturnType = exprType((Node *) originalAggregate);
+//		int32 workerReturnTypeMod = exprTypmod((Node *) originalAggregate);
+//		Oid workerCollationId = exprCollation((Node *) originalAggregate);
+//
+//		/* extract schema name of hll */
+//		Oid hllId = get_extension_oid("topn", false);
+//		Oid hllSchemaOid = get_extension_schema(hllId);
+//		const char *hllSchemaName = get_namespace_name(hllSchemaOid);
+//
+//		aggregateFunctionId = FunctionOid(hllSchemaName, TOPN_UNION_AGGREGATE_NAME,
+//										  list_length(originalAggregate->args));
+////		aggregateFunctionId = AggregateFunctionOid(unionAggregateName,
+////												   unionInputType,
+////												   list_length(originalAggregate->args));
+//
+//		/* create argument for the topn_union_agg() aggregate */
+//		column = makeVar(masterTableId, walkerContext->columnId, workerReturnType,
+//						 workerReturnTypeMod, workerCollationId, columnLevelsUp);
+//		topNAggArgument = makeTargetEntry((Expr *) column, argumentId, NULL, false);
+//
+//		args = list_make1(topNAggArgument);
+//		aggArgTypes = list_make1_oid(JSONBOID);
+//
+//		/*
+//		 * In case the custom number of counters is used in topn_add_agg()
+//		 * or topn_union_agg()
+//		 */
+//		if (list_length(originalAggregate->args) == 2)
+//		{
+//			args = lappend(args, (TargetEntry *) list_nth(originalAggregate->args, 1));
+//			aggArgTypes = list_make2_oid(JSONBOID, INT4OID);
+//		}
+//
+//		walkerContext->columnId++;
+//
+//		/* construct the master topn_union_agg() expression */
+//		masterUnionAggregate = copyObject(originalAggregate);
+//		masterUnionAggregate->aggfnoid = aggregateFunctionId;
+//		masterUnionAggregate->args = args;
+//		masterUnionAggregate->aggtype = originalAggregate->aggtype;
+//		masterUnionAggregate->aggargtypes = aggArgTypes;
+//		masterUnionAggregate->aggkind = AGGKIND_NORMAL;
+//		masterUnionAggregate->aggfilter = NULL;
+//		masterUnionAggregate->aggtranstype = InvalidOid;
+//		masterUnionAggregate->aggsplit = AGGSPLIT_SIMPLE;
+//		newMasterExpression = (Expr *) masterUnionAggregate;
+//	}
 	else
 	{
 		/*
@@ -1921,6 +1986,27 @@ MasterAggregateExpression(Aggref *originalAggregate,
 						 &aggregateCosts);
 
 	return newMasterExpression;
+}
+
+
+static AggregateInfo *
+GetAggregateInfo(char *aggregateName)
+{
+	int aggregateCount = lengthof(AggregateInfoArr);
+	for (int aggregateIndex = 0; aggregateIndex < aggregateCount; aggregateIndex++)
+	{
+		AggregateInfo *tempInfo = (AggregateInfo *) AggregateInfoArr[aggregateIndex];
+		char *aggWorkerName = tempInfo -> aggWorkerName;
+		char *aggMasterName = tempInfo -> aggMasterName;
+
+		if (strncmp(aggWorkerName, aggregateName, NAMEDATALEN) == 0 ||
+			strncmp(aggMasterName, aggregateName, NAMEDATALEN) == 0)
+		{
+			return tempInfo;
+		}
+	}
+
+	return NULL;
 }
 
 

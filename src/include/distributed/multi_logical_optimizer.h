@@ -43,6 +43,26 @@
 #define TOPN_ADD_AGGREGATE_NAME "topn_add_agg"
 #define TOPN_UNION_AGGREGATE_NAME "topn_union_agg"
 
+#define TOPN_AGG {"topn_add_agg", "topn_union_agg", JSONBOID, true, "topn", NULL}
+#define HLL_AGG {"hll_add_agg", "hll_union_agg", InvalidOid, true, "hll", "hll"}
+
+typedef struct
+{
+	char	*aggWorkerName;
+	char	*aggMasterName;
+	Oid		masterInputType;
+	bool	extension;
+	char	*extensionName;
+	char	*returnTypeName;
+}AggregateInfo;
+
+const AggregateInfo topnAgg = TOPN_AGG;
+const AggregateInfo hllAgg = HLL_AGG;
+
+static const AggregateInfo *const AggregateInfoArr[] = {
+	&topnAgg, &hllAgg
+};
+
 
 /*
  * AggregateType represents an aggregate function's type, where the function is
@@ -73,8 +93,8 @@ typedef enum
 	AGGREGATE_EVERY = 15,
 	AGGREGATE_HLL_ADD = 16,
 	AGGREGATE_HLL_UNION = 17,
-	AGGREGATE_TOPN_ADD_AGG = 18,
-	AGGREGATE_TOPN_UNION_AGG = 19
+	AGGREGATE_TOPN_ADD = 18,
+	AGGREGATE_TOPN_UNION = 19
 } AggregateType;
 
 
