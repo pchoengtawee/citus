@@ -515,7 +515,7 @@ SELECT create_reference_table('reference_table_second');
 ALTER TABLE reference_table_second ADD CONSTRAINT fk FOREIGN KEY(referencing_column) REFERENCES reference_table(id);
 
 -- test foreign key creation on ALTER TABLE from reference table to local table
-DROP TABLE reference_table;
+DROP TABLE reference_table CASCADE;
 CREATE TABLE reference_table(id int PRIMARY KEY, referencing_column int);
 SELECT create_reference_table('reference_table');
 ALTER TABLE reference_table ADD CONSTRAINT fk FOREIGN KEY(referencing_column) REFERENCES referenced_local_table(id);

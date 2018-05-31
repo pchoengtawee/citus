@@ -474,7 +474,8 @@ CreateHashDistributedTableShards(Oid relationId, Oid colocatedTableId,
 	 */
 	EnsureSchemaExistsOnAllNodes(relationId);
 
-	if (RegularTable(relationId))
+
+	if (RegularTable(relationId) && !TableHasForeignKeyToReferenceTable(relationId))
 	{
 		useExclusiveConnection = IsTransactionBlock() || !localTableEmpty;
 	}

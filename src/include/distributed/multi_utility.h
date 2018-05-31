@@ -25,6 +25,7 @@ typedef struct DDLJob
 {
 	Oid targetRelationId;      /* oid of the target distributed relation */
 	bool concurrentIndexCmd;   /* related to a CONCURRENTLY index command? */
+	bool executeSequentially;  /* used to create foreign keys sequentially */
 	const char *commandString; /* initial (coordinator) DDL command string */
 	List *taskList;            /* worker DDL tasks to execute */
 } DDLJob;
@@ -49,6 +50,8 @@ extern void ErrorIfUnsupportedConstraint(Relation relation, char distributionMet
 
 extern Datum master_drop_all_shards(PG_FUNCTION_ARGS);
 extern Datum master_modify_multiple_shards(PG_FUNCTION_ARGS);
+
+extern bool TableHasForeignKeyToReferenceTable(Oid relationOid);
 
 
 #endif /* MULTI_UTILITY_H */

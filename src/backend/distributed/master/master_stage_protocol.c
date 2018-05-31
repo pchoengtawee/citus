@@ -634,8 +634,18 @@ WorkerCreateShard(Oid relationId, int shardIndex, uint64 shardId, List *ddlComma
 		}
 		else
 		{
-			referencedShardId = ColocatedShardIdInRelation(referencedRelationId,
-														   shardIndex);
+			if (PartitionMethod(referencedRelationId) == DISTRIBUTE_BY_NONE)
+			{
+				List *shardList = LoadShardList(referencedRelationId);
+				uint64 *shardIdPointer = (uint64 *) linitial(shardList);
+
+				referencedShardId = (*shardIdPointer);
+			}
+			else
+			{
+				referencedShardId = ColocatedShardIdInRelation(referencedRelationId,
+														   	   shardIndex);
+			}
 		}
 
 		appendStringInfo(applyForeignConstraintCommand,
