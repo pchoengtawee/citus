@@ -644,7 +644,7 @@ WorkerCreateShard(Oid relationId, int shardIndex, uint64 shardId, List *ddlComma
 			else
 			{
 				referencedShardId = ColocatedShardIdInRelation(referencedRelationId,
-														   	   shardIndex);
+															   shardIndex);
 			}
 		}
 

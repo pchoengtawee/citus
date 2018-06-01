@@ -52,6 +52,7 @@ extern Datum master_drop_all_shards(PG_FUNCTION_ARGS);
 extern Datum master_modify_multiple_shards(PG_FUNCTION_ARGS);
 
 extern bool TableHasForeignKeyToReferenceTable(Oid relationOid);
+extern bool ConstraintIsAForeignKeyToReferenceTable(char *name, Oid relationId);
 
 
 #endif /* MULTI_UTILITY_H */

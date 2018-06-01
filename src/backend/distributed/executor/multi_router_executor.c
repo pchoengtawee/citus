@@ -1083,6 +1083,7 @@ ExecuteSingleDDLTaskWithoutResults(Task *task)
 	}
 }
 
+
 /*
  * ExecuteModifyTasks executes a list of tasks on remote nodes, and
  * optionally retrieves the results and stores them in a tuple store.
