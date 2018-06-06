@@ -1,5 +1,3 @@
-/* citus--7.4-3--7.4-4 */
-
 CREATE FUNCTION citus.mitmproxy(text) RETURNS TABLE(result text) AS $$
 DECLARE
   command ALIAS FOR $1;

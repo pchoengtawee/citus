@@ -1,4 +1,5 @@
 # get everything ready for failure testing
+test: failure_test_helpers
 test: failure_setup
 
 test: failure_testing
