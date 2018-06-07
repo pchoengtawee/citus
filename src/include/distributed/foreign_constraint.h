@@ -14,10 +14,14 @@
 #include "utils/relcache.h"
 #include "nodes/primnodes.h"
 
+extern bool ConstraintIsAForeignKeyToReferenceTable(char *constraintName,
+													Oid leftRelationId);
 extern void ErrorIfUnsupportedForeignConstraint(Relation relation, char
 												distributionMethod,
 												Var *distributionColumn, uint32
 												colocationId);
+extern bool ForeignKeyExistsFromColumnToReferenceTable(char *droppedColumnName,
+													   Oid leftRelationId);
 extern List * GetTableForeignConstraintCommands(Oid relationId);
 extern bool TableHasForeignKeyToReferenceTable(Oid relationId);
 extern bool TableReferenced(Oid relationId);
