@@ -11,6 +11,7 @@
  */
 
 #include "postgres.h"
+#include "funcapi.h"
 
 #include "access/htup_details.h"
 #include "catalog/namespace.h"
@@ -22,6 +23,7 @@
 #include "distributed/master_protocol.h"
 #include "distributed/multi_join_order.h"
 #include "nodes/pg_list.h"
+#include "utils/catcache.h"
 #include "utils/fmgroids.h"
 #include "utils/rel.h"
 #include "utils/relcache.h"
@@ -29,6 +31,8 @@
 #include "utils/syscache.h"
 #include "utils/lsyscache.h"
 
+
+static FRelGraph *frelGraph = NULL;
 
 typedef struct FRelNodeId
 {
@@ -44,10 +48,10 @@ typedef struct FRelNode
 }FRelNode;
 
 
-static void SetFRelNodeParameters(FRelGraph *frelGraph, FRelNode *frelNode,
-								  uint32 *currentIndex, Oid relationId);
-static void ClosureUtil(FRelGraph *frelGraph, uint32 sourceId, uint32 vertexId);
-static void CreateTransitiveClosure(FRelGraph *frelGraph);
+static void SetFRelNodeParameters(FRelNode *frelNode, uint32 *currentIndex,
+								  Oid relationId);
+static void ClosureUtil(uint32 sourceId, uint32 vertexId);
+static void CreateTransitiveClosure();
 
 /* this function is only exported in the regression tests */
 PG_FUNCTION_INFO_V1(get_foreign_key_relation);
@@ -59,34 +63,53 @@ PG_FUNCTION_INFO_V1(get_foreign_key_relation);
 Datum
 get_foreign_key_relation(PG_FUNCTION_ARGS)
 {
-	Oid relationId = PG_GETARG_OID(0);
-	bool isReferencing = PG_GETARG_BOOL(1);
-	FRelGraph *frelGraph = CreateForeignKeyRelationGraph();
-	List *refList = GetForeignKeyRelation(frelGraph, relationId, isReferencing);
-	ListCell *nodeCell = NULL;
+	FuncCallContext *functionContext = NULL;
+	ListCell *foreignRelationCell = NULL;
 
-	foreach(nodeCell, refList)
+	CheckCitusVersion(ERROR);
+
+	if (SRF_IS_FIRSTCALL())
 	{
-		Oid refOid = (Oid) lfirst_oid(nodeCell);
+		Oid relationId = PG_GETARG_OID(0);
+		bool isReferencing = PG_GETARG_BOOL(1);
+		List *refList = GetForeignKeyRelation(relationId, isReferencing);
 
-		if (isReferencing)
-		{
-			elog(LOG, "Path from relation %s to relation %s", get_rel_name(relationId), get_rel_name(refOid));
-		}
-		else
-		{
-			elog(LOG, "Path from relation %s to relation %s", get_rel_name(refOid), get_rel_name(relationId));
-		}
+		/* create a function context for cross-call persistence */
+		functionContext = SRF_FIRSTCALL_INIT();
+
+		foreignRelationCell = list_head(refList);
+		functionContext->user_fctx = foreignRelationCell;
 	}
 
-	PG_RETURN_VOID();
+	/*
+	 * On every call to this function, we get the current position in the
+	 * statement list. We then iterate to the next position in the list and
+	 * return the current statement, if we have not yet reached the end of
+	 * list.
+	 */
+	functionContext = SRF_PERCALL_SETUP();
+
+	foreignRelationCell = (ListCell *) functionContext->user_fctx;
+	if (foreignRelationCell != NULL)
+	{
+		Oid refId = lfirst_oid(foreignRelationCell);
+
+		functionContext->user_fctx = lnext(foreignRelationCell);
+
+		SRF_RETURN_NEXT(functionContext, PointerGetDatum(refId));
+	}
+	else
+	{
+		SRF_RETURN_DONE(functionContext);
+	}
 }
+
 
 /*
  * CreateForeignKeyRelationGraph creates the foreign key relation graph using
  * foreign constraint provided by pg_constraint metadata table.
  */
-FRelGraph *
+void
 CreateForeignKeyRelationGraph()
 {
 	SysScanDesc fkeyScan;
@@ -94,8 +117,15 @@ CreateForeignKeyRelationGraph()
 	HASHCTL info;
 	uint32 hashFlags = 0;
 	Relation fkeyRel;
-	FRelGraph *frelGraph = (FRelGraph *) palloc(sizeof(FRelGraph));
 	uint32 curIndex = 0;
+
+	/* if we have already created the graph, use it */
+	if (frelGraph != NULL)
+	{
+		return;
+	}
+
+	frelGraph = (FRelGraph *) palloc(sizeof(FRelGraph));
 
 	/* create (oid) -> [FRelNode] hash */
 	memset(&info, 0, sizeof(info));
@@ -166,7 +196,7 @@ CreateForeignKeyRelationGraph()
 					 * index to oid mapping. Then, add it to the adjacency list
 					 * of referring node.
 					 */
-					SetFRelNodeParameters(frelGraph, referredNode, &curIndex,
+					SetFRelNodeParameters(referredNode, &curIndex,
 										  con->confrelid);
 					referringNode->adjacencyList = lappend(referringNode->adjacencyList,
 														   referredNode);
@@ -182,7 +212,7 @@ CreateForeignKeyRelationGraph()
 			/*
 			 * If referring node is not exist in the graph, set its remaining parameters.
 			 */
-			SetFRelNodeParameters(frelGraph, referringNode, &curIndex, con->conrelid);
+			SetFRelNodeParameters(referringNode, &curIndex, con->conrelid);
 
 			if (referredFound)
 			{
@@ -191,7 +221,7 @@ CreateForeignKeyRelationGraph()
 			}
 			else
 			{
-				SetFRelNodeParameters(frelGraph, referredNode, &curIndex, con->confrelid);
+				SetFRelNodeParameters(referredNode, &curIndex, con->confrelid);
 				referringNode->adjacencyList = lappend(referringNode->adjacencyList,
 													   referredNode);
 			}
@@ -217,12 +247,10 @@ CreateForeignKeyRelationGraph()
 	 * Transitivity matrix will be used to find affected and affecting relations
 	 * for foreign key relation graph.
 	 */
-	CreateTransitiveClosure(frelGraph);
+	CreateTransitiveClosure();
 
 	systable_endscan(fkeyScan);
 	heap_close(fkeyRel, AccessShareLock);
-
-	return frelGraph;
 }
 
 
@@ -231,7 +259,7 @@ CreateForeignKeyRelationGraph()
  * for FRelGraph.
  */
 static void
-SetFRelNodeParameters(FRelGraph *frelGraph, FRelNode *frelNode, uint32 *currentIndex, Oid
+SetFRelNodeParameters(FRelNode *frelNode, uint32 *currentIndex, Oid
 					  relationId)
 {
 	frelNode->adjacencyList = NIL;
@@ -257,13 +285,13 @@ SetFRelNodeParameters(FRelGraph *frelGraph, FRelNode *frelNode, uint32 *currentI
  * graph.
  */
 static void
-CreateTransitiveClosure(FRelGraph *frelGraph)
+CreateTransitiveClosure()
 {
 	uint32 tableCounter = 0;
 
 	while (tableCounter < frelGraph->nodeCount)
 	{
-		ClosureUtil(frelGraph, tableCounter, tableCounter);
+		ClosureUtil(tableCounter, tableCounter);
 		tableCounter += 1;
 	}
 
@@ -281,7 +309,8 @@ CreateTransitiveClosure(FRelGraph *frelGraph)
 				Oid firstRelationId = frelGraph->indexToOid[tableCounter];
 				Oid secondRelationId = frelGraph->indexToOid[innerTableCounter];
 
-				elog(DEBUG1, "Path from relation %s to relation %s", get_rel_name(firstRelationId),
+				elog(DEBUG1, "Path from relation %s to relation %s", get_rel_name(
+						 firstRelationId),
 					 get_rel_name(secondRelationId));
 			}
 			innerTableCounter += 1;
@@ -296,7 +325,7 @@ CreateTransitiveClosure(FRelGraph *frelGraph)
  * for a given source id.
  */
 static void
-ClosureUtil(FRelGraph *frelGraph, uint32 sourceId, uint32 vertexId)
+ClosureUtil(uint32 sourceId, uint32 vertexId)
 {
 	FRelNodeId *currentNodeId = (FRelNodeId *) palloc(sizeof(FRelNodeId));
 	FRelNode *referringNode = NULL;
@@ -319,7 +348,7 @@ ClosureUtil(FRelGraph *frelGraph, uint32 sourceId, uint32 vertexId)
 		if (frelGraph->transitivityMatrix[sourceId][currentNeighbourIndex] == false)
 		{
 			frelGraph->transitivityMatrix[sourceId][currentNeighbourIndex] = true;
-			ClosureUtil(frelGraph, sourceId, currentNeighbourIndex);
+			ClosureUtil(sourceId, currentNeighbourIndex);
 		}
 	}
 }
@@ -330,7 +359,7 @@ ClosureUtil(FRelGraph *frelGraph, uint32 sourceId, uint32 vertexId)
  * relation id.
  */
 List *
-GetForeignKeyRelation(FRelGraph *frelGraph, Oid relationId, bool isAffecting)
+GetForeignKeyRelation(Oid relationId, bool isAffecting)
 {
 	List *foreignKeyList = NIL;
 	bool isFound = false;
@@ -338,10 +367,11 @@ GetForeignKeyRelation(FRelGraph *frelGraph, Oid relationId, bool isAffecting)
 	FRelNode *relationNode = NULL;
 	uint32 relationIndex = -1;
 	relationNodeId->relationId = relationId;
+	MemoryContext oldContext = MemoryContextSwitchTo(CacheMemoryContext);
 
+	CreateForeignKeyRelationGraph();
 	relationNode = (FRelNode *) hash_search(frelGraph->nodeMap, relationNodeId,
-											HASH_ENTER, &isFound);
-
+											HASH_FIND, &isFound);
 	if (!isFound)
 	{
 		return NIL;
@@ -380,6 +410,8 @@ GetForeignKeyRelation(FRelGraph *frelGraph, Oid relationId, bool isAffecting)
 			}
 		}
 	}
+
+	MemoryContextSwitchTo(oldContext);
 
 	return foreignKeyList;
 }
